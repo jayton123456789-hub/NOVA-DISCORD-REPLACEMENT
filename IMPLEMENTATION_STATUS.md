@@ -25,3 +25,11 @@ Studio and Vaultspace remain dormant future work.
 
 Passing component tests or compilation does not establish live call reliability.
 Do not publish this branch as the completed Social release.
+
+## Validation checkpoint
+- npm test: 3 tests passed.
+- npm run build: passed.
+- cargo check --locked with Rust 1.95.0: passed.
+- Tauri release build and Windows x64 NSIS packaging: passed.
+- GitHub Actions: blocked before job start by the repository account billing lock.
+- Live WebView2 calls and cross-network compatibility: not yet validated.
