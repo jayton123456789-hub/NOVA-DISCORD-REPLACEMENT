@@ -1,0 +1,26 @@
+[package]
+name = "nova-social"
+version = "1.0.1"
+description = "NOVA private social desktop"
+authors = ["NOVA"]
+edition = "2021"
+
+[lib]
+name = "nova_social_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sysinfo = "0.39.6"
+axum = { version = "0.8", features = ["ws", "multipart"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "net", "fs"] }
+tower-http = { version = "0.6", features = ["cors", "limit"] }
+futures-util = "0.3"
+uuid = { version = "1", features = ["v4"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+local-ip-address = "0.6"
