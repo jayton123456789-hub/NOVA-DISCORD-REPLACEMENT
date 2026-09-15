@@ -33,3 +33,12 @@ Do not publish this branch as the completed Social release.
 - Tauri release build and Windows x64 NSIS packaging: passed.
 - GitHub Actions: blocked before job start by the repository account billing lock.
 - Live WebView2 calls and cross-network compatibility: not yet validated.
+
+## Automatic updater implemented (1.0.2)
+- Rust-owned startup check against the published GitHub latest.json endpoint.
+- Signed download/install with 8-second checks and 120-second downloads.
+- Safe startup deferral; active sessions receive a notification and update next launch.
+- Version 1.0.2 includes the public key; the private key remains outside the repo.
+- Release-NOVA.ps1 builds/verifies signed artifacts and uploads drafts.
+- GitHub workflow is prepared but still requires owner-managed secrets and unlocking Actions.
+- Full installed-version-to-next-version upgrade has not yet been exercised.

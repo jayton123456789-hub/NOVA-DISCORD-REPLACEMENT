@@ -1,3 +1,4 @@
+mod updates;
 mod server;
 use serde::Serialize;
 use std::{fs, path::PathBuf, sync::Mutex, time::Instant};
@@ -36,4 +37,4 @@ fn get_runtime_metrics(state:State<'_,MetricsState>)->Result<RuntimeMetrics,Stri
 fn export_diagnostics(app:AppHandle,metrics:State<'_,MetricsState>,host:State<'_,ServerController>)->Result<String,String>{let m=get_runtime_metrics(metrics)?;let hs=host.0.lock().ok().and_then(|g|g.as_ref().map(|r|r.status.clone()));let dir=app_dir(&app)?;let path=dir.join("NOVA-Diagnostics.txt");let text=format!("NOVA v1 Diagnostics\n===================\nNOVA CPU: {:.2}%\nNOVA RAM: {:.1} MB\nHelper processes: {}\nSystem CPU: {:.1}%\nSystem RAM: {:.1}/{:.1} GB\nUptime: {} sec\nHost: {:?}\nLog: {}\n",m.nova_cpu_percent,m.nova_memory_mb,m.helper_processes,m.system_cpu_percent,m.system_memory_used_gb,m.system_memory_total_gb,m.uptime_seconds,hs.map(|h| (h.running, h.space_name, h.port)),dir.join("nova.log").display());fs::write(&path,text).map_err(|e|e.to_string())?;Ok(path.to_string_lossy().to_string())}
 
 #[cfg_attr(mobile,tauri::mobile_entry_point)]
-pub fn run(){tauri::Builder::default().manage(ServerController(Mutex::new(None))).manage(MetricsState{system:Mutex::new(System::new_all()),started:Instant::now()}).invoke_handler(tauri::generate_handler![start_host,stop_host,get_host_status,get_runtime_metrics,export_diagnostics]).run(tauri::generate_context!()).expect("error while running NOVA")}
+pub fn run(){tauri::Builder::default().plugin(tauri_plugin_updater::Builder::new().build()).manage(updates::Updates::default()).manage(ServerController(Mutex::new(None))).manage(MetricsState{system:Mutex::new(System::new_all()),started:Instant::now()}).invoke_handler(tauri::generate_handler![updates::skip_update,updates::check_update,updates::install_update,start_host,stop_host,get_host_status,get_runtime_metrics,export_diagnostics]).run(tauri::generate_context!()).expect("error while running NOVA")}
