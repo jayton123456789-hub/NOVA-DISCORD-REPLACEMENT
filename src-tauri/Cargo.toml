@@ -1,6 +1,6 @@
 [package]
 name = "nova-social"
-version = "1.0.2"
+version = "1.0.3"
 description = "NOVA private social desktop"
 authors = ["NOVA"]
 edition = "2021"

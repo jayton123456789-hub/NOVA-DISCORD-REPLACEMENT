@@ -15,6 +15,11 @@ npm.cmd test
 if ($LASTEXITCODE -ne 0) { throw 'Tests failed' }
 npm.cmd run tauri build -- --bundles nsis
 if ($LASTEXITCODE -ne 0) { throw 'Signed build failed' }
+# PE subsystem 2 is Windows GUI; subsystem 3 would spawn a console window.
+$exeBytes = [IO.File]::ReadAllBytes((Join-Path $PSScriptRoot 'src-tauri/target/release/nova-social.exe'))
+$peOffset = [BitConverter]::ToInt32($exeBytes, 0x3c)
+$subsystem = [BitConverter]::ToUInt16($exeBytes, $peOffset + 24 + 68)
+if ($subsystem -ne 2) { throw "Release executable must use the Windows GUI subsystem; got $subsystem" }
 $bundle = Join-Path $PSScriptRoot "src-tauri/target/release/bundle/nsis/NOVA_${version}_x64-setup.exe"
 $signature = "$bundle.sig"
 if (!(Test-Path $signature)) { throw 'Missing update signature' }
