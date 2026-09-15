@@ -1,13 +1,15 @@
 import { useEffect, useRef } from 'react';
 import { Camera, CameraOff, Headphones, Mic, MicOff, MonitorUp, PhoneOff } from 'lucide-react';
+import RemoteAudio from './RemoteAudio';
 import type { Member } from '../types';
 import { colorFromName } from '../lib/connection';
 
 function MediaTile({ stream, name, muted=false, local=false, onPoint }: { stream: MediaStream|null; name:string; muted?:boolean; local?:boolean; onPoint?:(x:number,y:number)=>void }){
   const ref=useRef<HTMLVideoElement>(null);
-  useEffect(()=>{ if(ref.current)ref.current.srcObject=stream; },[stream]);
+
   const hasVideo=!!stream?.getVideoTracks().some((t)=>t.readyState==='live');
-  return <div className={`media-tile ${hasVideo?'has-video':''}`} onPointerDown={(e)=>{if(!onPoint)return; const r=e.currentTarget.getBoundingClientRect(); onPoint((e.clientX-r.left)/r.width,(e.clientY-r.top)/r.height);}} onPointerMove={(e)=>{if(!onPoint||e.buttons!==1)return; const r=e.currentTarget.getBoundingClientRect(); onPoint((e.clientX-r.left)/r.width,(e.clientY-r.top)/r.height);}}>{hasVideo?<video ref={ref} autoPlay playsInline muted={muted||local}/>:<div className="media-avatar" style={{background:colorFromName(name)}}>{name.slice(0,1).toUpperCase()}</div>}<span>{local?'You':name}</span></div>;
+  useEffect(() => { const video = ref.current; if (!video) return; video.srcObject = stream; return () => { video.pause(); video.srcObject = null; }; }, [stream, hasVideo]);
+  return <div className={`media-tile ${hasVideo?'has-video':''}`} onPointerDown={(e)=>{if(!onPoint)return; const r=e.currentTarget.getBoundingClientRect(); onPoint((e.clientX-r.left)/r.width,(e.clientY-r.top)/r.height);}} onPointerMove={(e)=>{if(!onPoint||e.buttons!==1)return; const r=e.currentTarget.getBoundingClientRect(); onPoint((e.clientX-r.left)/r.width,(e.clientY-r.top)/r.height);}}>{hasVideo?<video ref={ref} autoPlay playsInline muted/>:<div className="media-avatar" style={{background:colorFromName(name)}}>{name.slice(0,1).toUpperCase()}</div>}{!local && <RemoteAudio stream={stream} muted={muted} name={name}/>}<span>{local?'You':name}</span></div>;
 }
 
 type Props={channelName:string; selfId:string; members:Member[]; remoteStreams:Record<string,MediaStream>; localPreview:MediaStream|null; muted:boolean; deafened:boolean; cameraOn:boolean; sharing:boolean; mediaNote:string; onMute:()=>void; onDeafen:()=>void; onCamera:()=>void; onShare:()=>void; onLeave:()=>void; onOverlay:(x:number,y:number)=>void;};

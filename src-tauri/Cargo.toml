@@ -1,6 +1,6 @@
 [package]
 name = "nova-social"
-version = "1.0.1"
+version = "1.0.3"
 description = "NOVA private social desktop"
 authors = ["NOVA"]
 edition = "2021"
@@ -24,3 +24,8 @@ futures-util = "0.3"
 uuid = { version = "1", features = ["v4"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 local-ip-address = "0.6"
+tauri-plugin-updater = "2"
+
+[dev-dependencies]
+base64 = "0.22"
+minisign-verify = "0.2"
