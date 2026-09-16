@@ -1,0 +1,16 @@
+NOVA v1.0.4 candidate validation snapshot
+========================================
+
+Checkpoint branch: feat/nova-account-internet-foundation
+Checkpoint commit: cad96e2ef87cd2fc55824f3814c441a26b218fed
+Draft PR: #2
+
+PASS: JavaScript syntax checks for services/rendezvous/src/index.js, account/relay tests, scripts/check-internet-transport.cjs, scripts/check-turn.cjs, scripts/test-service.mjs.
+PASS: 34 TypeScript/TSX source files syntactically transpiled with TypeScript; 0 syntax errors.
+PASS: v1.0.4 metadata aligned inside this ZIP across package.json, package-lock.json, Cargo.toml, Cargo.lock, and tauri.conf.json.
+NOT RUN HERE: npm dependency-complete semantic typecheck / Vitest suite, because package installation could not complete in this container.
+NOT RUN HERE: Rust cargo check/test or Windows Tauri/NSIS build; Rust toolchain and Windows environment are not available in this container.
+NOT POSSIBLE HERE: signing installer, because the existing NOVA private updater key correctly remains only with the project owner.
+NOT YET PROVEN: real Google OAuth deployment, two-house control transport, real WebRTC media, forced TURN relay candidate, v1.0.3 -> v1.0.4 updater transaction.
+
+This package is therefore a code-complete integration candidate/handoff, not a claim of production validation.

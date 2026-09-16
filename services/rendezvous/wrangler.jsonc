@@ -1,0 +1,17 @@
+{
+  "name": "nova-rendezvous",
+  "main": "src/index.js",
+  "compatibility_date": "2026-09-15",
+  "workers_dev": true,
+  "durable_objects": {
+    "bindings": [
+      { "name": "SPACES", "class_name": "SpaceRelay" },
+      { "name": "ACCOUNTS", "class_name": "AccountRegistry" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["SpaceRelay"] },
+    { "tag": "v2", "new_sqlite_classes": ["AccountRegistry"] }
+  ],
+  "observability": { "enabled": false }
+}

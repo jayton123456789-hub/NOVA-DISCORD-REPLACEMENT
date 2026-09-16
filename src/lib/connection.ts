@@ -3,6 +3,14 @@ import type { ConnectionConfig } from '../types';
 export function parseInvite(raw: string): ConnectionConfig {
   let value = raw.trim();
   if (!value) throw new Error('Paste an invite first.');
+  if (value.startsWith('nova://space/')) {
+    const url = new URL(value);
+    const spaceId = url.pathname.slice(1);
+    const token = url.hash.slice(1);
+    const relay = new URL(url.searchParams.get('relay') || '');
+    if (!/^[a-f0-9-]{36}$/.test(spaceId) || !/^[a-f0-9]{64}$/.test(token) || relay.username || relay.password || relay.search || relay.hash || relay.pathname !== '/' || (relay.protocol !== 'https:' && !(relay.protocol === 'http:' && ['127.0.0.1','localhost'].includes(relay.hostname)))) throw new Error('Invalid internet invite');
+    return { host: relay.hostname, port: Number(relay.port || 443), token, spaceId, relayUrl: relay.origin };
+  }
   value = value.replace(/^nova:\/\//i, '').replace(/^https?:\/\//i, '').replace(/^wss?:\/\//i, '');
   const [hostPort, token] = value.split('/');
   if (!hostPort || !token) throw new Error('Invite should look like nova://HOST:38765/TOKEN');
@@ -15,6 +23,7 @@ export function parseInvite(raw: string): ConnectionConfig {
 }
 
 export function inviteString(c: ConnectionConfig) {
+  if(c.relayUrl && c.spaceId) return `nova://space/${c.spaceId}?relay=${encodeURIComponent(c.relayUrl)}#${c.token}`;
   return `nova://${c.host}:${c.port}/${c.token}`;
 }
 

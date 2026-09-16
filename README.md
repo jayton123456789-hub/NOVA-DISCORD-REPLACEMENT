@@ -1,68 +1,60 @@
-# NOVA v1.0.1
+# NOVA Social
 
-NOVA v1 is no longer an OS experiment. It is a lean private social desktop app for small friend groups.
+NOVA is a lightweight Windows social desktop app for a small private friend group. The released line is currently v1.0.3; the account/internet foundation in this source tree is development work for the next release and must pass the deployment/real-PC gates in `IMPLEMENTATION_STATUS.md` before publication.
 
-## What actually works
+## Released foundation
 
-- Host a NOVA space directly from the desktop app.
-- Join a friend's space with a `nova://HOST:PORT/TOKEN` invite.
-- Persistent text channels and message history on the host.
-- Create text and voice channels.
-- Online member presence and typing indicators.
-- Real microphone voice chat using WebRTC.
-- Webcam video.
-- Screen sharing through WebView2's Screen Capture API.
-- System audio is mixed into the stream when Windows supplies an audio track.
-- When camera is enabled during screen share, NOVA composites the webcam into the outgoing screen feed. Drag on your local share tile to move the webcam overlay.
-- Shared files up to 100 MB, stored on the host and downloadable by everyone in the space.
-- Runtime CPU/RAM diagnostics in Settings, with one-click diagnostics export.
-- No Three.js, no fake OS shell, no embedded browser, no permanent hardware polling, and no capture pipeline until you actually join voice or share.
+v1.0.3 already provides the signed Windows installer/updater, host-based persistent chat, text/voice channels, presence/typing, WebRTC microphone/camera/screen share, local shared files, diagnostics, and the voice-only playback/Windows GUI fixes.
 
-## First run
+## Current development direction
 
-Open PowerShell in the extracted folder:
+This branch adds the pieces required for a normal cross-house app experience:
+
+- First-run `Continue with Google` NOVA accounts.
+- Windows-protected NOVA sessions and private per-device keys.
+- Stable hosted Spaces and automatic workspace restoration.
+- Empty user-created Spaces instead of premade channels.
+- Request/ACK message persistence and draft preservation.
+- Project-owned Cloudflare account/admission/rendezvous infrastructure that ordinary users never configure.
+- Encrypted outbound control/signaling relay for different-house connections.
+- Account-backed Space membership after first invite admission.
+- Authenticated ICE configuration with server-issued short-lived TURN credentials when a controlled TURN pool is configured.
+- Safer WebRTC offer collision/candidate handling and capture cancellation.
+
+The current internet control bridge deliberately reuses the embedded Rust host so cross-house Social can be proven before the later fully distributed event-replication architecture replaces the host as a single state authority.
+
+## Developer setup
+
+Normal users should install NOVA once and sign in. They should not run these steps.
+
+For development:
 
 ```powershell
 Set-ExecutionPolicy -Scope Process Bypass -Force
 .\Setup-NOVA.ps1
-```
-
-After the first successful setup:
-
-```powershell
 .\Run-NOVA.ps1
 ```
 
-## Make an installer for your friends
+The online service lives in `services/rendezvous`. See its README for the one-time Cloudflare/Google operator setup.
+
+A shareable production build requires the deployed NOVA service origin. Save it on the release PC at:
+
+```text
+%USERPROFILE%\.nova-signing\service-url.txt
+```
+
+Then build with:
 
 ```powershell
 .\Build-NOVA.ps1
 ```
 
-When it finishes, Windows Explorer opens the Tauri bundle directory. Send the generated installer to your friends.
+Signed releases continue through `Release-NOVA.ps1` and GitHub Releases. See `UPDATES.md`.
 
-## Connecting friends
+## Performance rule
 
-### Same Wi-Fi / LAN
-Host a space. NOVA shows an invite like:
+Opening NOVA for chat should keep the app mostly asleep. No Studio engine, media capture, canvas compositor, detailed metrics polling, SFU/relay helper or other heavy subsystem should run unless the active feature needs it.
 
-`nova://192.168.1.42:38765/abc123...`
+## Not finished yet
 
-Send that invite to your friends.
-
-### Friends outside your house
-NOVA v1 is self-hosted and does not depend on a NOVA cloud service. The cleanest route is Tailscale:
-
-1. Host and friends install Tailscale and join the same tailnet.
-2. Replace the LAN IP in the NOVA invite with the host's Tailscale IP.
-3. Friends paste the invite into NOVA.
-
-Traditional TCP port forwarding for port `38765` also works, but Tailscale is usually much less annoying.
-
-## Performance philosophy
-
-NOVA does not run a 3D renderer or an animation loop while idle. Camera, microphone and screen capture are created only when used. Detailed process telemetry polls only while the Settings panel is open.
-
-## Current architecture note
-
-Voice/video is peer-to-peer WebRTC mesh. That is ideal for the intended small friend-group size because the host does not have to relay everyone’s media. It is not intended for giant public servers. A future large-room version should add an SFU and TURN relay.
+Do not treat the current development branch as proof of production internet media. Before v1.0.4, the Worker/Google service must be deployed, different-house account/text persistence tested, a controlled TURN path must produce a forced relay candidate, and voice/camera/share/reconnect must pass real two-PC Windows tests. Full distributed signed-event replication, creator-offline operation, peer service election, scalable media hosts and 16-user validation remain later Social milestones.

@@ -1,33 +1,25 @@
-# Signed NOVA updates
+# NOVA updates
 
-Install version 1.0.2 or newer once. Older builds do not contain an updater.
-Release builds check GitHub's latest published release at startup. A valid newer
-signed installer is downloaded, verified, and installed before Social opens.
-Checking fails open after eight seconds; downloads time out after two minutes.
-Open NOVA now cancels the startup update before installation begins.
-While running, checks occur approximately every thirty minutes and on focus
-when overdue. Updates discovered during use are applied on the next launch.
+NOVA v1.0.2 introduced signed automatic updates. v1.0.3 fixed the release executable so it runs as a normal Windows GUI application.
 
-## Local release (works while Actions is unavailable)
-Bump package.json, src-tauri/Cargo.toml, and src-tauri/tauri.conf.json together.
-Refresh both lockfiles, commit and push the source, then run:
+## v1.0.4 candidate
 
-    ./Release-NOVA.ps1 -Publish
+The next signed update adds the account/internet foundation required for ordinary cross-house use:
 
-This builds, signs and uploads a draft. Review/test the draft, then publish it.
-Never overwrite a published version: ship a higher version for corrections.
+- first-run NOVA account login with Google in the system browser;
+- DPAPI-protected NOVA session, device identity, saved workspace and hosted-Space capabilities;
+- persistent account-backed Space admission;
+- project-owned Cloudflare rendezvous/encrypted-control infrastructure that normal users never configure;
+- internet invites that no longer depend on reaching a private LAN address;
+- stronger message ACK/retry behavior and persistent drafts;
+- safer WebRTC negotiation, candidate ordering and one ICE-restart recovery attempt;
+- invite copy feedback and fallback;
+- production-service validation in build/release scripts.
 
-The project private key is outside the checkout in the current Windows user's
-.nova-signing directory, restricted by NTFS permissions. Keep a secure offline
-backup of that directory. Never commit the private key or replace its identity.
-Only the public verification key belongs in tauri.conf.json.
+The v1.0.4 source is a test candidate until the Worker/Google setup and real two-house tests pass. TURN fallback is configurable but is not considered validated until a forced relay candidate is observed on real infrastructure.
 
-## GitHub Actions
-The repository owner must resolve the existing Actions account billing lock and
-configure the release environment with TAURI_SIGNING_PRIVATE_KEY and
-TAURI_SIGNING_PRIVATE_KEY_PASSWORD (empty for the current local key).
-Use the existing project key, not a newly generated key. Protect the release
-environment with reviewer approval. Then run Release NOVA manually.
+## Release rule
 
-Tauri update signatures are configured; Windows Authenticode signing is not.
-An unknown-publisher prompt may therefore appear on manual installation.
+`Release-NOVA.ps1` creates a signed installer and updater manifest. With `-Publish`, it uploads a **draft** GitHub release. Keep it draft until the installed candidate has been tested. Once the release is published as latest, existing NOVA installations query `releases/latest/download/latest.json`, verify the signature, install the update and restart.
+
+Never replace the existing NOVA signing private key. The public key embedded in installed clients must continue to match future release signatures.

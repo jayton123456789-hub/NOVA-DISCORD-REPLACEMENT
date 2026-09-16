@@ -1,6 +1,14 @@
 param([switch]$Publish)
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
+$serviceFile = Join-Path $env:USERPROFILE '.nova-signing/service-url.txt'
+if (!$env:VITE_NOVA_SERVICE_URL) {
+  if ($env:NOVA_SERVICE_URL) { $env:VITE_NOVA_SERVICE_URL = $env:NOVA_SERVICE_URL.Trim() }
+  elseif (Test-Path $serviceFile) { $env:VITE_NOVA_SERVICE_URL = (Get-Content $serviceFile -Raw).Trim() }
+}
+if (!$env:VITE_NOVA_SERVICE_URL) { throw 'NOVA online service URL is required for a shareable build. Deploy services once, then save the Worker origin in .nova-signing/service-url.txt.' }
+if ($env:VITE_NOVA_SERVICE_URL -notmatch '^https://') { throw 'Production NOVA service URL must use HTTPS.' }
+& (Join-Path $PSScriptRoot 'scripts\Test-NOVA-Service.ps1') -ServiceUrl $env:VITE_NOVA_SERVICE_URL -RequireGoogle
 $repo = 'jayton123456789-hub/NOVA-DISCORD-REPLACEMENT'
 $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
 $key = Join-Path $env:USERPROFILE '.nova-signing/nova.key'
@@ -12,7 +20,13 @@ if (Test-Path $rust) { $env:PATH = "$rust;$env:PATH" }
 npm.cmd ci
 if ($LASTEXITCODE -ne 0) { throw 'Dependency installation failed' }
 npm.cmd test
-if ($LASTEXITCODE -ne 0) { throw 'Tests failed' }
+if ($LASTEXITCODE -ne 0) { throw 'Frontend tests failed' }
+node scripts/test-service.mjs
+if ($LASTEXITCODE -ne 0) { throw 'Online-service tests failed' }
+npx.cmd --yes wrangler@4.132.0 deploy --dry-run --config services/rendezvous/wrangler.jsonc
+if ($LASTEXITCODE -ne 0) { throw 'Cloudflare Worker dry-run failed' }
+cargo test --locked --manifest-path src-tauri/Cargo.toml --lib
+if ($LASTEXITCODE -ne 0) { throw 'Rust tests failed' }
 npm.cmd run tauri build -- --bundles nsis
 if ($LASTEXITCODE -ne 0) { throw 'Signed build failed' }
 # PE subsystem 2 is Windows GUI; subsystem 3 would spawn a console window.
@@ -39,7 +53,7 @@ $manifest | ConvertTo-Json -Depth 6 | Set-Content -Encoding utf8 $manifestPath
 if ($Publish) {
   if (git status --porcelain) { throw 'Commit all source changes before publishing.' }
   $commit = git rev-parse HEAD
-  gh release create "v$version" $bundle $signature $manifestPath --repo $repo --target $commit --title "NOVA $version" --notes 'Signed Windows build with automatic startup updates and voice playback fixes.' --draft
+  gh release create "v$version" $bundle $signature $manifestPath --repo $repo --target $commit --title "NOVA $version" --notes 'Signed NOVA desktop update. See the repository release notes for the validated changes in this version.' --draft
   if ($LASTEXITCODE -ne 0) { throw 'Release upload failed' }
   Write-Host 'Draft uploaded. Publish it after validation.'
 }

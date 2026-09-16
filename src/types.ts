@@ -40,6 +40,8 @@ export type SharedFile = {
 };
 
 export type HostStatus = {
+  relay_owner: string;
+  space_id: string;
   running: boolean;
   space_name: string;
   port: number;
@@ -59,6 +61,9 @@ export type RuntimeMetrics = {
 };
 
 export type ConnectionConfig = {
+  relayUrl?: string;
+  spaceId?: string;
+  hostedSpaceId?: string;
   host: string;
   port: number;
   token: string;

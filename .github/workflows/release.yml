@@ -7,20 +7,32 @@ jobs:
   release:
     runs-on: windows-latest
     environment: release
+    env:
+      VITE_NOVA_SERVICE_URL: ${{ vars.NOVA_SERVICE_URL }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '24.18.0'
+          node-version: '24'
           cache: npm
       - run: rustup toolchain install 1.95.0 --profile minimal
       - run: npm ci
       - run: npm test
+      - name: Validate NOVA online services
+        shell: pwsh
+        run: |
+          if (-not $env:VITE_NOVA_SERVICE_URL) { throw 'Set the release-environment variable NOVA_SERVICE_URL before building a shareable NOVA release.' }
+          .\scripts\Test-NOVA-Service.ps1 -ServiceUrl $env:VITE_NOVA_SERVICE_URL -RequireGoogle
+      - name: Test Worker and Durable Objects locally
+        run: node scripts/test-service.mjs
+      - name: Worker dry run
+        run: npx --yes wrangler@4.132.0 deploy --dry-run --config services/rendezvous/wrangler.jsonc
       - uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          VITE_NOVA_SERVICE_URL: ${{ vars.NOVA_SERVICE_URL }}
         with:
           tagName: v__VERSION__
           releaseName: NOVA v__VERSION__
