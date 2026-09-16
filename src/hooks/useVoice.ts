@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { callIceServers } from '../lib/ice';
 import type { Member } from '../types';
 
 type SignalData =
@@ -7,6 +8,7 @@ type SignalData =
   | { kind: 'ice'; candidate: RTCIceCandidateInit };
 
 type Args = {
+  sessionToken: string;
   selfId: string;
   members: Member[];
   voiceChannel: string | null;
@@ -16,7 +18,12 @@ type Args = {
   announceLeave: () => boolean;
 };
 
-export function useVoice({ selfId, members, voiceChannel, sendSignal, onSignal, announceJoin, announceLeave }: Args) {
+export function useVoice({ sessionToken, selfId, members, voiceChannel, sendSignal, onSignal, announceJoin, announceLeave }: Args) {
+  const room = useRef<string | null>(null);
+  const captureGeneration = useRef(0);
+  const ice = useRef<RTCIceServer[]>([]);
+  const negotiation = useRef(new Map<string, { making: boolean; ignore: boolean; settingAnswer: boolean; restarting: boolean; candidates: RTCIceCandidateInit[]; queue: Promise<unknown>; video?: RTCRtpSender; audio?: RTCRtpSender }>());
+  const self = useRef(selfId); self.current = selfId;
   const pcs = useRef(new Map<string, RTCPeerConnection>());
   const remote = useRef(new Map<string, MediaStream>());
   const micStream = useRef<MediaStream | null>(null);
@@ -47,15 +54,19 @@ export function useVoice({ selfId, members, voiceChannel, sendSignal, onSignal, 
   const attachLocalTracks = useCallback(async (pc: RTCPeerConnection) => {
     const audio = localAudioTrack();
     const video = currentVideoTrack();
-    if (audio && !pc.getSenders().some((s) => s.track?.kind === 'audio')) pc.addTrack(audio, micStream.current!);
-    if (video && !pc.getSenders().some((s) => s.track?.kind === 'video')) pc.addTrack(video, compositeStream.current ?? cameraStream.current!);
+    const state = Array.from(pcs.current).find(([, value]) => value === pc);
+    const session = state ? negotiation.current.get(state[0]) : undefined;
+    if (!session) return;
+    if (audio && !session.audio) session.audio = pc.addTrack(compositeStream.current?.getAudioTracks()[0] ?? audio, compositeStream.current ?? micStream.current!);
+    if (video && !session.video) session.video = pc.addTrack(video, compositeStream.current ?? cameraStream.current!);
   }, []);
 
   const createPc = useCallback((peer: string) => {
     const existing = pcs.current.get(peer);
     if (existing) return existing;
-    const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun1.l.google.com:19302' }] });
+    const pc = new RTCPeerConnection({ iceServers: ice.current, iceTransportPolicy: localStorage.getItem('nova.forceRelay')==='1'?'relay':'all' });
     pcs.current.set(peer, pc);
+    negotiation.current.set(peer, { making: false, ignore: false, settingAnswer: false, restarting: false, candidates: [], queue: Promise.resolve() });
     remote.current.set(peer, new MediaStream());
     publishRemote();
     pc.onicecandidate = (e) => { if (e.candidate) sendSignal(peer, { kind: 'ice', candidate: e.candidate.toJSON() } satisfies SignalData); };
@@ -67,63 +78,113 @@ export function useVoice({ selfId, members, voiceChannel, sendSignal, onSignal, 
       publishRemote();
     };
     pc.onconnectionstatechange = () => {
-      if (['failed', 'closed'].includes(pc.connectionState)) {
-        pc.close(); pcs.current.delete(peer); remote.current.delete(peer); publishRemote();
+      const session = negotiation.current.get(peer);
+      if (pc.connectionState === 'connected') {
+        if (session) session.restarting = false;
+        setMediaNote('');
+        return;
+      }
+      if (pc.connectionState === 'failed' && session && !session.restarting && room.current) {
+        session.restarting = true;
+        setMediaNote('Voice connection changed. NOVA is trying to reconnect...');
+        session.queue = session.queue.then(async () => {
+          if (pcs.current.get(peer) !== pc || !room.current) return;
+          pc.restartIce();
+          if (pc.signalingState !== 'stable') return;
+          session.making = true;
+          try {
+            await attachLocalTracks(pc);
+            await pc.setLocalDescription();
+            sendSignal(peer, { kind: 'offer', sdp: pc.localDescription! } satisfies SignalData);
+          } finally { session.making = false; }
+        }).catch(() => {});
+        window.setTimeout(() => {
+          if (pcs.current.get(peer) !== pc) return;
+          if (pc.connectionState === 'failed') {
+            setMediaNote('Voice could not recover a working direct or relay path. Leave and rejoin the voice channel to retry.');
+            pc.close(); pcs.current.delete(peer); negotiation.current.delete(peer); remote.current.delete(peer); publishRemote();
+          } else if (negotiation.current.get(peer)) {
+            negotiation.current.get(peer)!.restarting = false;
+          }
+        }, 8000);
+        return;
+      }
+      if (pc.connectionState === 'closed') {
+        pcs.current.delete(peer); negotiation.current.delete(peer); remote.current.delete(peer); publishRemote();
       }
     };
     return pc;
-  }, [sendSignal]);
+  }, [attachLocalTracks, sendSignal]);
 
   const makeOffer = useCallback(async (peer: string) => {
+    if (!room.current) return;
     const pc = createPc(peer);
-    if (pc.signalingState !== 'stable') return;
-    await attachLocalTracks(pc);
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
-    sendSignal(peer, { kind: 'offer', sdp: pc.localDescription! } satisfies SignalData);
+    const session = negotiation.current.get(peer)!;
+    if (session.making || pc.signalingState !== 'stable') return;
+    session.making = true;
+    try {
+      await attachLocalTracks(pc);
+      await pc.setLocalDescription();
+      sendSignal(peer, { kind: 'offer', sdp: pc.localDescription! } satisfies SignalData);
+    } finally { session.making = false; }
   }, [attachLocalTracks, createPc, sendSignal]);
 
-  useEffect(() => onSignal(async (from, raw) => {
+  useEffect(() => onSignal((from, raw) => {
+    if (!room.current || !micStream.current) return;
     const data = raw as SignalData;
     if (!data || !('kind' in data)) return;
     const pc = createPc(from);
-    try {
-      if (data.kind === 'offer') {
+    const session = negotiation.current.get(from)!;
+    session.queue = session.queue.then(async () => {
+      if (pcs.current.get(from) !== pc || !room.current) return;
+      if (data.kind === 'offer' || data.kind === 'answer') {
+        const collision = data.kind === 'offer' && (session.making || !(pc.signalingState === 'stable' || session.settingAnswer));
+        const polite = self.current.localeCompare(from) > 0;
+        session.ignore = !polite && collision;
+        if (session.ignore) { session.candidates = []; return; }
+        session.settingAnswer = data.kind === 'answer';
         await pc.setRemoteDescription(data.sdp);
-        await attachLocalTracks(pc);
-        const answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
-        sendSignal(from, { kind: 'answer', sdp: pc.localDescription! } satisfies SignalData);
-      } else if (data.kind === 'answer') {
-        if (pc.signalingState === 'have-local-offer') await pc.setRemoteDescription(data.sdp);
-      } else if (data.kind === 'ice') {
-        await pc.addIceCandidate(data.candidate);
+        session.settingAnswer = false;
+        for (const candidate of session.candidates.splice(0)) await pc.addIceCandidate(candidate);
+        if (data.kind === 'offer') {
+          await attachLocalTracks(pc);
+          await pc.setLocalDescription();
+          sendSignal(from, { kind: 'answer', sdp: pc.localDescription! } satisfies SignalData);
+        }
+      } else if (data.kind === 'ice' && !session.ignore) {
+        if (pc.remoteDescription) await pc.addIceCandidate(data.candidate);
+        else if (session.candidates.length < 256) session.candidates.push(data.candidate);
       }
-    } catch (err) { console.warn('NOVA WebRTC signal failed', err); }
+    }).catch(() => { session.settingAnswer = false; setMediaNote('Voice negotiation failed. Leave and rejoin to retry.'); });
   }), [attachLocalTracks, createPc, onSignal, sendSignal]);
 
   useEffect(() => {
     if (!voiceChannel || !selfId) return;
     const peers = members.filter((m) => m.voice_channel === voiceChannel && m.peer_id !== selfId).map((m) => m.peer_id);
     peers.forEach((peer) => {
+      const exists = pcs.current.has(peer);
       createPc(peer);
-      if (selfId.localeCompare(peer) < 0) makeOffer(peer).catch(console.warn);
+      if (!exists && selfId.localeCompare(peer) < 0) makeOffer(peer).catch(console.warn);
     });
     for (const [peer, pc] of pcs.current) {
-      if (!peers.includes(peer)) { pc.close(); pcs.current.delete(peer); remote.current.delete(peer); }
+      if (!peers.includes(peer)) { pc.close(); pcs.current.delete(peer); negotiation.current.delete(peer); remote.current.delete(peer); }
     }
     publishRemote();
   }, [members, voiceChannel, selfId, createPc, makeOffer]);
 
   const join = useCallback(async (channelId: string) => {
-    if (!micStream.current) {
-      micStream.current = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: false });
-    }
-    localAudioTrack()!.enabled = !muted;
-    announceJoin(channelId);
-  }, [announceJoin, muted]);
+    const generation = ++captureGeneration.current;
+    ice.current = await callIceServers(sessionToken);
+    const stream = micStream.current ?? await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: false });
+    if (generation !== captureGeneration.current) { stream.getTracks().forEach(t => t.stop()); throw new Error('Voice join was cancelled.'); }
+    micStream.current = stream;
+    localAudioTrack()!.enabled = !muted && !deafened;
+    room.current = channelId;
+    setMediaNote('');
+    if (!announceJoin(channelId)) { room.current = null; stream.getTracks().forEach(t => t.stop()); micStream.current = null; throw new Error('Connect to the Space before joining voice.'); }
+  }, [announceJoin, muted, deafened, sessionToken]);
 
-  const cleanupPeers = () => { pcs.current.forEach((pc) => pc.close()); pcs.current.clear(); remote.current.clear(); publishRemote(); };
+  const cleanupPeers = () => { pcs.current.forEach((pc) => pc.close()); pcs.current.clear(); negotiation.current.clear(); remote.current.clear(); publishRemote(); };
 
   const stopShare = useCallback(async () => {
     if (drawFrame.current) cancelAnimationFrame(drawFrame.current);
@@ -136,7 +197,7 @@ export function useVoice({ selfId, members, voiceChannel, sendSignal, onSignal, 
     const replacementVideo = cameraStream.current?.getVideoTracks()[0] ?? null;
     const replacementAudio = localAudioTrack();
     for (const pc of pcs.current.values()) {
-      const videoSender = pc.getSenders().find((s) => s.track?.kind === 'video');
+      const videoSender = Array.from(pcs.current).map(([id, value]) => value === pc ? negotiation.current.get(id)?.video : undefined).find(Boolean);
       if (videoSender) await videoSender.replaceTrack(replacementVideo);
       const audioSender = pc.getSenders().find((s) => s.track?.kind === 'audio');
       if (audioSender && replacementAudio) await audioSender.replaceTrack(replacementAudio);
@@ -146,31 +207,35 @@ export function useVoice({ selfId, members, voiceChannel, sendSignal, onSignal, 
   }, []);
 
   const leave = useCallback(() => {
+    captureGeneration.current++; room.current = null;
     announceLeave(); cleanupPeers();
     micStream.current?.getTracks().forEach((t) => t.stop()); micStream.current = null;
     cameraStream.current?.getTracks().forEach((t) => t.stop()); cameraStream.current = null;
-    if (sharing) stopShare().catch(() => {});
+    stopShare().catch(() => {});
     setCameraOn(false); setSharing(false); setLocalPreview(null);
-  }, [announceLeave, sharing, stopShare]);
+  }, [announceLeave, stopShare]);
 
   const toggleMute = useCallback(() => {
     const next = !muted; setMuted(next);
-    micStream.current?.getAudioTracks().forEach((t) => { t.enabled = !next; });
-  }, [muted]);
+    micStream.current?.getAudioTracks().forEach((t) => { t.enabled = !next && !deafened; });
+  }, [muted, deafened]);
 
   const toggleCamera = useCallback(async () => {
     if (cameraOn) {
       cameraStream.current?.getTracks().forEach((t) => t.stop()); cameraStream.current = null; shareCameraVideo.current = null; setCameraOn(false);
       if (!sharing) {
         for (const pc of pcs.current.values()) {
-          const sender = pc.getSenders().find((s) => s.track?.kind === 'video');
+          const sender = Array.from(pcs.current).map(([id, value]) => value === pc ? negotiation.current.get(id)?.video : undefined).find(Boolean);
           if (sender) await sender.replaceTrack(null);
         }
         setLocalPreview(null);
       }
       return;
     }
+    if (!room.current) throw new Error('Join voice before enabling your camera.');
+    const generation = captureGeneration.current;
     const cam = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 30 } }, audio: false });
+    if (generation !== captureGeneration.current) { cam.getTracks().forEach(t=>t.stop()); return; }
     cameraStream.current = cam; setCameraOn(true);
     if (sharing) {
       const preview = document.createElement('video');
@@ -181,8 +246,8 @@ export function useVoice({ selfId, members, voiceChannel, sendSignal, onSignal, 
     } else {
       const track = cam.getVideoTracks()[0];
       for (const [peer, pc] of pcs.current) {
-        const sender = pc.getSenders().find((s) => s.track?.kind === 'video');
-        if (sender) await sender.replaceTrack(track); else { pc.addTrack(track, cam); await makeOffer(peer); }
+        const sender = Array.from(pcs.current).map(([id, value]) => value === pc ? negotiation.current.get(id)?.video : undefined).find(Boolean);
+        if (sender) await sender.replaceTrack(track); else { negotiation.current.get(peer)!.video = pc.addTrack(track, cam); await makeOffer(peer); }
       }
       setLocalPreview(new MediaStream([track]));
     }
@@ -190,7 +255,10 @@ export function useVoice({ selfId, members, voiceChannel, sendSignal, onSignal, 
 
   const startShare = useCallback(async () => {
     if (sharing) { await stopShare(); return; }
+    if (!room.current) throw new Error('Join voice before sharing.');
+    const generation = captureGeneration.current;
     const display = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: { ideal: 30, max: 60 } }, audio: true });
+    if (generation !== captureGeneration.current) { display.getTracks().forEach(t=>t.stop()); return; }
     shareStream.current = display;
     const screenVideo = document.createElement('video');
     screenVideo.srcObject = new MediaStream(display.getVideoTracks()); screenVideo.muted = true; await screenVideo.play();
@@ -237,8 +305,8 @@ export function useVoice({ selfId, members, voiceChannel, sendSignal, onSignal, 
     }
     compositeStream.current = out; setLocalPreview(out); setSharing(true);
     for (const [peer, pc] of pcs.current) {
-      let vs = pc.getSenders().find((s) => s.track?.kind === 'video');
-      if (vs) await vs.replaceTrack(composedVideo); else { pc.addTrack(composedVideo, out); await makeOffer(peer); }
+      let vs = Array.from(pcs.current).map(([id, value]) => value === pc ? negotiation.current.get(id)?.video : undefined).find(Boolean);
+      if (vs) await vs.replaceTrack(composedVideo); else { negotiation.current.get(peer)!.video = pc.addTrack(composedVideo, out); await makeOffer(peer); }
       const mixed = out.getAudioTracks()[0]; const as = pc.getSenders().find((s) => s.track?.kind === 'audio');
       if (mixed && as) await as.replaceTrack(mixed);
     }
@@ -247,7 +315,8 @@ export function useVoice({ selfId, members, voiceChannel, sendSignal, onSignal, 
 
   const setOverlayPosition = useCallback((x: number, y: number) => { overlay.current = { ...overlay.current, x: Math.max(.08, Math.min(.92, x)), y: Math.max(.10, Math.min(.90, y)) }; }, []);
 
-  useEffect(() => () => { cleanupPeers(); micStream.current?.getTracks().forEach((t) => t.stop()); cameraStream.current?.getTracks().forEach((t) => t.stop()); shareStream.current?.getTracks().forEach((t) => t.stop()); }, []);
+  useEffect(() => { micStream.current?.getAudioTracks().forEach(t => {t.enabled = !muted && !deafened;}); }, [muted, deafened]);
+  useEffect(() => () => { captureGeneration.current++; room.current=null; if(drawFrame.current)cancelAnimationFrame(drawFrame.current); audioContext.current?.close().catch(()=>{}); compositeStream.current?.getTracks().forEach(t=>t.stop()); cleanupPeers(); micStream.current?.getTracks().forEach((t) => t.stop()); cameraStream.current?.getTracks().forEach((t) => t.stop()); shareStream.current?.getTracks().forEach((t) => t.stop()); }, []);
 
   return { join, leave, muted, toggleMute, deafened, setDeafened, cameraOn, toggleCamera, sharing, startShare, remoteStreams, localPreview, mediaNote, setMediaNote, setOverlayPosition };
 }

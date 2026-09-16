@@ -18,7 +18,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sysinfo = "0.39.6"
 axum = { version = "0.8", features = ["ws", "multipart"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "net", "fs"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "net", "fs", "time", "io-util"] }
 tower-http = { version = "0.6", features = ["cors", "limit"] }
 futures-util = "0.3"
 uuid = { version = "1", features = ["v4"] }

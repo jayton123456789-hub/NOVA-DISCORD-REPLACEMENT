@@ -1,14 +1,14 @@
 {
   "name": "nova-social",
   "private": true,
-  "version": "1.0.3",
+  "version": "1.0.4",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "test": "vitest run"
+    "test": "vitest run src"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.8.0",

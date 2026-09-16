@@ -10,3 +10,8 @@ Thumbs.db
 .env.*
 !.env.example
 src-tauri/gen/
+
+services/rendezvous/.wrangler/
+
+.playwright-cli/
+output/playwright/
