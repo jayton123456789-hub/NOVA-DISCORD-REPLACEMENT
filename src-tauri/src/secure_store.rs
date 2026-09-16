@@ -2,7 +2,7 @@ use std::ffi::c_void;
 
 fn hex(bytes: &[u8]) -> String { bytes.iter().map(|b| format!("{b:02x}")).collect() }
 fn unhex(value: &str) -> Result<Vec<u8>, String> {
-    if value.len() % 2 != 0 { return Err("Invalid protected value".into()); }
+    if value.len() % 2 != 0 || !value.bytes().all(|b| b.is_ascii_hexdigit()) { return Err("Invalid protected value".into()); }
     (0..value.len()).step_by(2).map(|i| u8::from_str_radix(&value[i..i+2], 16).map_err(|_| "Invalid protected value".to_string())).collect()
 }
 
@@ -63,6 +63,12 @@ pub fn unprotect(value: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn malformed_protected_values_do_not_panic() {
+        assert!(unhex("invalid").is_err());
+        assert!(unhex("\u{1f600}").is_err());
+        assert!(unprotect("dpapi:zz").is_err());
+    }
     #[test]
     fn protected_values_round_trip() {
         let secret = "session-secret-that-must-not-be-browser-storage";

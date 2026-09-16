@@ -2,7 +2,7 @@ import { invoke } from '@tauri-apps/api/core';
 import type { ConnectionConfig } from '../types';
 
 export type Workspace = { version: 2; username: string; current: ConnectionConfig | null; spaces: ConnectionConfig[]; channel: string };
-export function emptyWorkspace(): Workspace { return { version: 2, username: localStorage.getItem('nova.name') || '', current: null, spaces: [], channel: '' }; }
+export function emptyWorkspace(): Workspace { return { version: 2, username: '', current: null, spaces: [], channel: '' }; }
 
 function validConfig(value: any): value is ConnectionConfig {
   return !!value && typeof value.host === 'string' && Number.isInteger(value.port) && value.port > 0 && value.port < 65536 && typeof value.token === 'string' && !!value.token;

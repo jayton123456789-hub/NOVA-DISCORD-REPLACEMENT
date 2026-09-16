@@ -37,8 +37,7 @@ export function useNovaConnection(config: ConnectionConfig | null, username: str
   const send = useCallback((payload: unknown) => {
     const ws = socket.current;
     if (!ready.current || !ws || ws.readyState !== WebSocket.OPEN) return false;
-    ws.send(JSON.stringify(payload));
-    return true;
+    try { ws.send(JSON.stringify(payload)); return true; } catch { return false; }
   }, []);
 
   useEffect(() => {
@@ -53,7 +52,9 @@ export function useNovaConnection(config: ConnectionConfig | null, username: str
     const connect = () => {
       if (!alive || intentionallyClosed.current) return;
       setState((s) => ({ ...s, status: 'connecting', error: '' }));
-      const ws = config.relayUrl ? new RelaySocket(config, username.trim(), sessionToken) : new WebSocket(wsAddress(config, username.trim()));
+      let ws: WebSocket | RelaySocket;
+      try { ws = config.relayUrl ? new RelaySocket(config, username.trim(), sessionToken) : new WebSocket(wsAddress(config, username.trim())); }
+      catch (e) { setState(s => ({ ...s, status: 'error', error: String(e) })); return; }
       socket.current = ws;
 
       handshakeTimer = window.setTimeout(() => {
@@ -62,8 +63,8 @@ export function useNovaConnection(config: ConnectionConfig | null, username: str
       ws.onopen = () => {}; // Online only after the authenticated welcome arrives.
       ws.onerror = () => alive && setState((s) => ({ ...s, status: 'error', error: 'Could not reach this NOVA host.' }));
       ws.onclose = () => {
-        window.clearTimeout(handshakeTimer);
         if (!alive || socket.current !== ws) return;
+        window.clearTimeout(handshakeTimer);
         ready.current = false;
         failPending();
         failures += 1;
@@ -72,6 +73,7 @@ export function useNovaConnection(config: ConnectionConfig | null, username: str
         if (!intentionallyClosed.current && failures < 5) reconnectTimer.current = window.setTimeout(connect, Math.min(30000, 1000 * 2 ** failures) + Math.random() * 500);
       };
       ws.onmessage = (ev: {data: string}) => {
+        if (!alive || socket.current !== ws) return;
         let msg: any;
         try { msg = JSON.parse(ev.data); } catch { return; }
         if (!msg || typeof msg.type !== 'string') return;

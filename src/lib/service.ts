@@ -33,3 +33,11 @@ export async function serviceRequest<T>(path: string, init: RequestInit = {}, se
   if (response.status === 204) return undefined as T;
   return await response.json() as T;
 }
+
+export function trustedRelay(value: string, configured = serviceEndpoint) {
+  const origin = validateServiceEndpoint(value);
+  if (!configured || origin !== validateServiceEndpoint(configured)) {
+    throw new Error('This invite belongs to a different service. NOVA will not send your account session there.');
+  }
+  return origin;
+}

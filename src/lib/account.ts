@@ -27,7 +27,9 @@ export type AccountSession = {
 
 type CompleteResponse = { session: string; user: NovaUser; expiresAt: number };
 type BrowserLogin = { ticket: string };
-const SESSION_KEY = 'account-session';
+const SESSION_KEY = 'account-session-v2';
+type SavedSession = { version: 2; token: string; user: NovaUser; expiresAt: number };
+let restoreInFlight: Promise<AccountSession | null> | null = null;
 const PROFILE_KEY = 'account-profile';
 
 const native = () => '__TAURI_INTERNALS__' in window;
@@ -73,25 +75,30 @@ async function registerDevice(session: string, device: DeviceIdentity) {
   }, session);
 }
 
-export async function restoreAccount(): Promise<AccountSession | null> {
+export function restoreAccount(): Promise<AccountSession | null> {
+  if (!restoreInFlight) restoreInFlight = restoreSavedAccount().finally(() => { restoreInFlight = null; });
+  return restoreInFlight;
+}
+
+async function restoreSavedAccount(): Promise<AccountSession | null> {
   if (!serviceEndpoint || !native()) return null;
-  const token = await loadSecret(SESSION_KEY);
-  if (!token) return null;
-  const cachedText = await loadSecret(PROFILE_KEY);
-  const cached = cachedText ? JSON.parse(cachedText) as NovaUser : null;
+  const raw = await loadSecret(SESSION_KEY);
+  if (!raw) return null;
+  const saved = JSON.parse(raw) as SavedSession;
+  if (saved.version !== 2 || !/^[a-f0-9]{64}$/.test(saved.token) || !saved.user?.id || !Number.isFinite(saved.expiresAt)) throw new Error('Saved account data is invalid. It has been preserved.');
+  if (saved.expiresAt <= Date.now()) { await deleteSecret(SESSION_KEY); return null; }
   try {
-    const user = await serviceRequest<NovaUser>('/v1/account/me', {}, token);
+    const user = await serviceRequest<NovaUser>('/v1/account/me', {}, saved.token);
+    if (user.id !== saved.user.id) throw new Error('Saved account identity does not match its session.');
     const device = await ensureDeviceIdentity(user.id);
-    await registerDevice(token, device);
-    await saveSecret(PROFILE_KEY, JSON.stringify(user));
-    return { token, user, device, offline: false };
+    await registerDevice(saved.token, device);
+    await saveSecret(SESSION_KEY, JSON.stringify({ ...saved, user }));
+    return { token: saved.token, user, device, offline: false };
   } catch (error) {
-    if (error instanceof ServiceError && error.status === 401) {
-      await deleteSecret(SESSION_KEY);
-      await deleteSecret(PROFILE_KEY);
-      return null;
+    if (error instanceof ServiceError && error.status === 401) { await deleteSecret(SESSION_KEY); return null; }
+    if (error instanceof ServiceError && (error.status === 0 || error.status >= 500)) {
+      return { token: saved.token, user: saved.user, device: await ensureDeviceIdentity(saved.user.id), offline: true };
     }
-    if (cached) return { token, user: cached, device: await ensureDeviceIdentity(cached.id), offline: true };
     throw error;
   }
 }
@@ -99,12 +106,15 @@ export async function restoreAccount(): Promise<AccountSession | null> {
 export async function signInWithGoogle(): Promise<AccountSession> {
   if (!native()) throw new Error('Google sign-in is available in the installed NOVA app.');
   if (!serviceEndpoint) throw new Error('This NOVA build is missing its production service endpoint.');
-  const login = await invoke<BrowserLogin>('begin_google_login', { serviceUrl: serviceEndpoint });
-  const completed = await serviceRequest<CompleteResponse>('/v1/auth/complete', { method: 'POST', body: JSON.stringify({ ticket: login.ticket }) });
-  await saveSecret(SESSION_KEY, completed.session);
-  await saveSecret(PROFILE_KEY, JSON.stringify(completed.user));
+  const verifier = Array.from(crypto.getRandomValues(new Uint8Array(32)), n => n.toString(16).padStart(2, '0')).join('');
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier));
+  const challenge = Array.from(new Uint8Array(digest), n => n.toString(16).padStart(2, '0')).join('');
+  const login = await invoke<BrowserLogin>('begin_google_login', { serviceUrl: serviceEndpoint, challenge });
+  const completed = await serviceRequest<CompleteResponse>('/v1/auth/complete', { method: 'POST', body: JSON.stringify({ ticket: login.ticket, verifier }) });
+
   const device = await ensureDeviceIdentity(completed.user.id);
   await registerDevice(completed.session, device);
+  await saveSecret(SESSION_KEY, JSON.stringify({ version: 2, token: completed.session, user: completed.user, expiresAt: completed.expiresAt } satisfies SavedSession));
   return { token: completed.session, user: completed.user, device, offline: false };
 }
 
@@ -112,6 +122,7 @@ export async function signOut(session?: string) {
   if (session && serviceEndpoint) await serviceRequest('/v1/auth/logout', { method: 'POST' }, session).catch(() => {});
   await deleteSecret(SESSION_KEY);
   await deleteSecret(PROFILE_KEY);
+  await deleteSecret('account-session');
 }
 
 export function developmentAccount(): AccountSession {

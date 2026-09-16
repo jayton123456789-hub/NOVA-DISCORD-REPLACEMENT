@@ -33,9 +33,33 @@ function loopbackReturn(value) {
 
 async function bodyJson(request, max = 16 * 1024) {
   if (Number(request.headers.get('Content-Length') || 0) > max) throw new Error('too_large');
-  const text = await request.text();
-  if (text.length > max) throw new Error('too_large');
+  const reader = request.body?.getReader();
+  let size = 0;
+  const chunks = [];
+  if (reader) {
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        size += value.byteLength;
+        if (size > max) { await reader.cancel(); throw new Error('too_large'); }
+        chunks.push(value);
+      }
+    } finally { reader.releaseLock(); }
+  }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+  const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
   try { return JSON.parse(text || '{}'); } catch { throw new Error('invalid_json'); }
+}
+
+async function validPublicKey(value, algorithm, usages) {
+  if (!value || typeof value !== 'object' || value.kty !== 'EC' || value.crv !== 'P-256' ||
+      Object.hasOwn(value, 'd') || typeof value.x !== 'string' || typeof value.y !== 'string') return false;
+  if (Object.keys(value).some(key => !['kty', 'crv', 'x', 'y', 'ext', 'key_ops', 'alg', 'use'].includes(key))) return false;
+  try { await crypto.subtle.importKey('jwk', value, { name: algorithm, namedCurve: 'P-256' }, false, usages); return true; }
+  catch { return false; }
 }
 
 export default {
@@ -106,9 +130,10 @@ export class AccountRegistry extends DurableObject {
       if (!clientId || !clientSecret) return json({ error: 'Google sign-in is not configured for this NOVA deployment.' }, 503);
       const returnUrl = loopbackReturn(url.searchParams.get('return') || '');
       const appState = (url.searchParams.get('app_state') || '').toLowerCase();
-      if (!returnUrl || !HEX.test(appState)) return json({ error: 'Invalid NOVA sign-in callback.' }, 400);
+      const challenge = (url.searchParams.get('challenge') || '').toLowerCase();
+      if (!returnUrl || !HEX.test(appState) || !HEX.test(challenge)) return json({ error: 'Invalid NOVA sign-in callback.' }, 400);
       const oauthState = randomHex();
-      await this.ctx.storage.put(`flow:${oauthState}`, { returnUrl, appState, expiresAt: Date.now() + FLOW_TTL });
+      await this.ctx.storage.put(`flow:${oauthState}`, { returnUrl, appState, challenge, expiresAt: Date.now() + FLOW_TTL });
       const callback = `${url.origin}/v1/auth/google/callback`;
       const google = new URL('https://accounts.google.com/o/oauth2/v2/auth');
       google.searchParams.set('client_id', clientId);
@@ -144,7 +169,7 @@ export class AccountRegistry extends DurableObject {
         if (typeof profile.sub !== 'string' || typeof profile.email !== 'string' || profile.email_verified !== true) return finish({ error: 'google_identity_invalid' });
         const user = await this.userForIdentity(profile.sub, profile);
         const ticket = randomHex();
-        await this.ctx.storage.put(`ticket:${await hash(ticket)}`, { userId: user.id, expiresAt: Date.now() + TICKET_TTL });
+        await this.ctx.storage.put(`ticket:${await hash(ticket)}`, { userId: user.id, challenge: flow.challenge, expiresAt: Date.now() + TICKET_TTL });
         return finish({ ticket });
       } catch { return finish({ error: 'google_sign_in_unavailable' }); }
     }
@@ -155,8 +180,9 @@ export class AccountRegistry extends DurableObject {
       if (!HEX.test(ticket)) return json({ error: 'Invalid or expired NOVA sign-in ticket.' }, 401);
       const key = `ticket:${await hash(ticket)}`;
       const record = await this.ctx.storage.get(key);
+      const verifier = String(body.verifier || '');
+      if (!record || record.expiresAt <= Date.now() || !HEX.test(verifier) || await hash(verifier) !== record.challenge) return json({ error: 'Invalid or expired NOVA sign-in ticket.' }, 401);
       await this.ctx.storage.delete(key);
-      if (!record || record.expiresAt <= Date.now()) return json({ error: 'Invalid or expired NOVA sign-in ticket.' }, 401);
       const user = await this.ctx.storage.get(`user:${record.userId}`);
       if (!user) return json({ error: 'NOVA account was not found.' }, 401);
       const session = await this.createSession(user.id);
@@ -207,7 +233,7 @@ export class AccountRegistry extends DurableObject {
       if (!auth) return json({ error: 'Your NOVA session has expired.' }, 401);
       let body; try { body = await bodyJson(request, 24 * 1024); } catch { return json({ error: 'Invalid device registration.' }, 400); }
       const deviceId = String(body.deviceId || '');
-      if (!ID.test(deviceId) || typeof body.signingPublicKey !== 'object' || typeof body.encryptionPublicKey !== 'object') return json({ error: 'Invalid device registration.' }, 400);
+      if (!ID.test(deviceId) || !await validPublicKey(body.signingPublicKey, 'ECDSA', ['verify']) || !await validPublicKey(body.encryptionPublicKey, 'ECDH', [])) return json({ error: 'Invalid device registration.' }, 400);
       const record = { userId: auth.user.id, deviceId, deviceName: String(body.deviceName || 'NOVA device').slice(0, 80), signingPublicKey: body.signingPublicKey, encryptionPublicKey: body.encryptionPublicKey, updatedAt: Date.now() };
       await this.ctx.storage.put(`device:${auth.user.id}:${deviceId}`, record);
       await this.ctx.storage.put(auth.key, { ...auth.session, deviceId });

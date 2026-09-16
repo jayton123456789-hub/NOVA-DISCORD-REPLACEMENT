@@ -1,7 +1,7 @@
 import type { ConnectionConfig, HostStatus } from '../types';
 import { encryptedChannel, joinHash } from './relayCrypto';
 import { wsAddress } from './connection';
-import { serviceEndpoint, validateServiceEndpoint } from './service';
+import { serviceEndpoint, validateServiceEndpoint, trustedRelay } from './service';
 
 export const relayEndpoint = serviceEndpoint;
 export const validateRelay = validateServiceEndpoint;
@@ -25,6 +25,7 @@ export class RelaySocket {
   private incoming?: Awaited<ReturnType<typeof encryptedChannel>>;
   private id = '';
   constructor(config: ConnectionConfig, name: string, sessionToken: string) {
+    trustedRelay(config.relayUrl!);
     this.ws = new WebSocket(relayAddress(config.relayUrl!, config.spaceId!));
     this.ws.onopen = () => { joinHash(config.token).then(hash => transmit(this.ws, { role: 'guest', session: sessionToken, joinHash: hash })).catch(() => this.fail()); };
     this.ws.onmessage = e => {

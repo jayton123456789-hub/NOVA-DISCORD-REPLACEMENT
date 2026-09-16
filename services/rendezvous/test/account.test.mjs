@@ -26,7 +26,15 @@ test('development account sessions authorize profile/device APIs and logout revo
   assert.equal((await me.json()).email, account.user.email);
 
   const deviceId = randomUUID();
-  const device = await fetch(`${endpoint}/v1/devices/register`, { method:'POST', headers:{...headers,'Content-Type':'application/json'}, body:JSON.stringify({deviceId,deviceName:'Test PC',signingPublicKey:{kty:'EC',crv:'P-256',x:'x',y:'y'},encryptionPublicKey:{kty:'EC',crv:'P-256',x:'x',y:'y'}}) });
+  const signing = await crypto.subtle.generateKey({name:'ECDSA',namedCurve:'P-256'},true,['sign','verify']);
+  const encryption = await crypto.subtle.generateKey({name:'ECDH',namedCurve:'P-256'},true,['deriveBits']);
+  const signingPublicKey = await crypto.subtle.exportKey('jwk', signing.publicKey);
+  const encryptionPublicKey = await crypto.subtle.exportKey('jwk', encryption.publicKey);
+  for (const invalid of [null, {kty:'EC',crv:'P-256',x:'x',y:'y'}, await crypto.subtle.exportKey('jwk', signing.privateKey)]) {
+    const response = await fetch(`${endpoint}/v1/devices/register`, {method:'POST',headers:{...headers,'Content-Type':'application/json'},body:JSON.stringify({deviceId, signingPublicKey:invalid,encryptionPublicKey})});
+    assert.equal(response.status,400);
+  }
+  const device = await fetch(`${endpoint}/v1/devices/register`, { method:'POST', headers:{...headers,'Content-Type':'application/json'}, body:JSON.stringify({deviceId,deviceName:'Test PC',signingPublicKey,encryptionPublicKey}) });
   assert.equal(device.status, 200);
 
   const logout = await fetch(`${endpoint}/v1/auth/logout`, { method:'POST', headers });

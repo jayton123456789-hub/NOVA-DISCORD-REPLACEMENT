@@ -30,6 +30,8 @@ fn open_browser(url: &str) -> Result<(), String> {
     let mut command = { let mut c = Command::new("open"); c.arg(url); c };
     #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
     let mut command = { let mut c = Command::new("xdg-open"); c.arg(url); c };
+    #[cfg(target_os = "windows")]
+    { use std::os::windows::process::CommandExt; command.creation_flags(0x08000000); }
     command.spawn().map_err(|e| format!("Could not open your browser: {e}"))?;
     Ok(())
 }
@@ -39,13 +41,14 @@ fn query_value<'a>(query: &'a str, key: &str) -> Option<&'a str> {
 }
 
 #[tauri::command]
-pub async fn begin_google_login(service_url: String) -> Result<BrowserLoginResult, String> {
+pub async fn begin_google_login(service_url: String, challenge: String) -> Result<BrowserLoginResult, String> {
+    if challenge.len() != 64 || !challenge.bytes().all(|b| b.is_ascii_hexdigit()) { return Err("Invalid sign-in challenge".into()); }
     let service = service_origin(&service_url)?;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.map_err(|e| format!("Could not start the sign-in callback: {e}"))?;
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
     let app_state = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
     let callback = format!("http://127.0.0.1:{port}/callback");
-    let start = format!("{service}/v1/auth/google/start?return={}&app_state={}", pct(&callback), app_state);
+    let start = format!("{service}/v1/auth/google/start?return={}&app_state={}&challenge={}", pct(&callback), app_state, challenge.to_ascii_lowercase());
     open_browser(&start)?;
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(180);
@@ -55,7 +58,18 @@ pub async fn begin_google_login(service_url: String) -> Result<BrowserLoginResul
         let accepted = tokio::time::timeout(remaining, listener.accept()).await.map_err(|_| "Google sign-in timed out. Try again.".to_string())?;
         let (mut stream, _) = accepted.map_err(|e| format!("Sign-in callback failed: {e}"))?;
         let mut buffer = vec![0u8; 8192];
-        let read = stream.read(&mut buffer).await.map_err(|e| e.to_string())?;
+        let timeout = deadline.saturating_duration_since(tokio::time::Instant::now()).min(Duration::from_secs(3));
+        let mut read = 0;
+        let complete = tokio::time::timeout(timeout, async {
+            while read < buffer.len() {
+                let count = stream.read(&mut buffer[read..]).await?;
+                if count == 0 { break; }
+                read += count;
+                if buffer[..read].windows(4).any(|w| w == b"\r\n\r\n") { return Ok::<bool,std::io::Error>(true); }
+            }
+            Ok(false)
+        }).await;
+        if !matches!(complete, Ok(Ok(true))) { continue; }
         let request = String::from_utf8_lossy(&buffer[..read]);
         let path = request.lines().next().and_then(|line| line.split_whitespace().nth(1)).unwrap_or("");
         let (route, query) = path.split_once('?').unwrap_or((path, ""));

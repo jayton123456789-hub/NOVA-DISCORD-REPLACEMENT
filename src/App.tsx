@@ -43,13 +43,13 @@ export default function App() {
     };
     return <div className="app"><TitleBar/><LoginScreen busy={busy} error={error} onGoogle={google} onDevelopment={!native() ? () => setAccount(developmentAccount()) : undefined}/></div>;
   }
-  return <WorkspaceApp account={account} onAccountChanged={setAccount}/>;
+  return <WorkspaceApp key={account.user.id} account={account} onAccountChanged={setAccount}/>;
 }
 
 function WorkspaceApp({ account, onAccountChanged }: { account: AccountSession; onAccountChanged: (value: AccountSession | null) => void }) {
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const [error, setError] = useState('');
-  const load = useCallback(() => { setError(''); loadWorkspace(account.user.id).then(setWorkspace).catch(e => setError(String(e))); }, []);
+  const load = useCallback(() => { setError(''); loadWorkspace(account.user.id).then(setWorkspace).catch(e => setError(String(e))); }, [account.user.id]);
   useEffect(load, [load]);
   if (!workspace) return <div className="app"><TitleBar/><main className="empty-chat"><h2>{error || 'Opening your workspace...'}</h2>{error && <button onClick={load}>Retry loading saved data</button>}</main></div>;
   return <SocialApp initial={workspace} account={account} onAccountChanged={onAccountChanged}/>;
@@ -98,7 +98,7 @@ function SocialApp({ initial, account, onAccountChanged }: { initial: Workspace;
   const closeInvite = useCallback(() => setInviteOpen(false), []);
   useEffect(()=>{ if(!activeChannel){const first=nova.channels.find((c)=>c.kind==='text');if(first)setActiveChannel(first.id)} },[nova.channels,activeChannel]);
   useEffect(()=>{document.documentElement.classList.toggle('reduce-motion',reduceMotion);localStorage.setItem('nova.reduceMotion',reduceMotion?'1':'0')},[reduceMotion]);
-  useEffect(()=>{localStorage.setItem('nova.name',username)},[username]);
+
   useEffect(()=>{if(nova.status==='error')console.warn(nova.error)},[nova.status,nova.error]);
   const active=nova.channels.find((c)=>c.id===activeChannel)||null;
   const voiceName=nova.channels.find((c)=>c.id===voiceChannel)?.name;
